@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "hodgepod"
+version = "0.1.0"
+description = "A podcast transcription tool using Deepgram"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "*.py"}]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+deepgram-sdk = "^3.0.0"
+python-dotenv = "^1.0.0"
+feedparser = "^6.0.10"
+requests = "^2.31.0"
+beautifulsoup4 = "^4.12.2"
+asyncio = "^3.4.3"
+
+[tool.poetry.scripts]
+hodgepod = "main:run_main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

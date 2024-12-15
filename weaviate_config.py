@@ -2,6 +2,8 @@ import os
 from typing import Optional
 import weaviate
 from dotenv import load_dotenv
+from weaviate.connect import ConnectionParams
+from weaviate.auth import AuthApiKey
 
 # Load environment variables
 load_dotenv()
@@ -81,16 +83,26 @@ def init_weaviate_client() -> weaviate.WeaviateClient:
     """
     Initialize the Weaviate client with configuration.
     Returns:
-        weaviate.WeaviateClient: Configured Weaviate client
+        weaviate.WeaviateClient: Configured Weaviate client instance
     """
     # Get configuration from environment variables
     WEAVIATE_URL = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+    WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", "50051"))
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
     
-    # Configure client
-    client = weaviate.WeaviateClient(
+    # Create connection parameters
+    connection_params = ConnectionParams.from_url(
         url=WEAVIATE_URL,
-        auth_client_secret=weaviate.AuthApiKey(api_key=OPENAI_API_KEY)
+        grpc_port=WEAVIATE_GRPC_PORT
+    )
+    
+    # Create auth credentials
+    auth = AuthApiKey(api_key=OPENAI_API_KEY)
+    
+    # Initialize client with v4 syntax
+    client = weaviate.WeaviateClient(
+        connection_params=connection_params,
+        auth_credentials=auth
     )
     
     return client

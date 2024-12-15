@@ -1,152 +1,113 @@
-import logging
 import asyncio
-import os
-from typing import List, Tuple, Dict
-from dotenv import load_dotenv
-from deepgram import (
-    DeepgramClient,
-    PrerecordedOptions,
-    FileSource
-)
+import logging
+from typing import Dict, List, Optional
 import feedparser
-
-# Configure logging with more detailed format
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s'
-)
+from deepgram import Deepgram
+import aiohttp
+import os
+from datetime import datetime
+from dotenv import load_dotenv
+from weaviate_config import init_weaviate_client, ensure_schema_exists, store_podcast_transcript
 
 # Load environment variables
 load_dotenv()
-DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
 
-async def transcribe_url(url: str) -> Tuple[str, Dict]:
+async def transcribe_audio(audio_url: str, dg_client: Deepgram) -> Optional[Dict]:
     """
-    Transcribe a podcast episode from a URL using Deepgram.
-
-    Args:
-        url (str): URL of the podcast episode
-
-    Returns:
-        Tuple[str, Dict]: Tuple containing (transcript text, metadata)
+    Transcribe audio from URL using Deepgram.
     """
     try:
-        logging.info(f"Starting transcription for URL: {url}")
+        source = {'url': audio_url}
+        response = await dg_client.listen.prerecorded.v("1").transcribe_url(source)
         
-        # Initialize Deepgram
-        deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-        
-        # Configure transcription options
-        options = PrerecordedOptions(
-            smart_format=True,
-            punctuate=True,
-            diarize=True,
-            paragraphs=True
-        )
-        
-        logging.info("Sending request to Deepgram...")
-        source = FileSource(url=url)
-        response = await deepgram.listen.prerecorded.v("1").transcribe_url(source, options)
-        
-        # Get the transcript and metadata from the response
-        results = response.results
-        transcript = results.channels[0].alternatives[0].paragraphs.transcript
-        
-        # Extract metadata
-        metadata = {
-            'duration': results.metadata.duration,
-            'channels': results.metadata.channels,
-            'words': len(results.channels[0].alternatives[0].words)
-        }
-        
-        # Log first 10 lines of transcript
-        if transcript:
-            preview_lines = transcript.split('\n')[:10]
-            logging.info("Transcript preview (first 10 lines):")
-            for line in preview_lines:
-                logging.info(f"    {line}")
-                
-            logging.info(f"Transcription completed. Duration: {metadata['duration']}s, Words: {metadata['words']}")
-        else:
-            logging.warning("No transcript was generated")
-            
-        return transcript, metadata
-        
-    except Exception as e:
-        logging.error(f"Error transcribing URL {url}: {str(e)}")
-        return "", {}
-
-async def process_feed(feed_url: str) -> List[Dict]:
-    """
-    Process a podcast feed and transcribe its latest episode.
-
-    Args:
-        feed_url (str): URL of the podcast RSS feed
-
-    Returns:
-        List[Dict]: List containing transcripts and their metadata
-    """
-    try:
-        if not DEEPGRAM_API_KEY:
-            raise ValueError("DEEPGRAM_API_KEY not found in environment variables")
-            
-        logging.info(f"Processing feed: {feed_url}")
-        
-        logging.info("Fetching RSS feed...")
-        rss = feedparser.parse(feed_url)
-        
-        if not rss.entries:
-            logging.warning(f"No entries found in feed: {feed_url}")
-            return []
-            
-        episode = rss.entries[0]
-        episode_url = episode.enclosures[0].href
-        episode_title = episode.title
-        
-        logging.info(f"Found latest episode: {episode_title}")
-        logging.info(f"Episode URL: {episode_url}")
-        
-        transcript, metadata = await transcribe_url(episode_url)
-        
-        if transcript:
-            result = {
-                'transcript': transcript,
-                'metadata': {
-                    **metadata,
-                    'title': episode_title,
-                    'feed_url': feed_url,
-                    'episode_url': episode_url
-                }
+        if response and 'results' in response:
+            return {
+                'transcript': response['results']['channels'][0]['alternatives'][0]['transcript'],
+                'words': len(response['results']['channels'][0]['alternatives'][0]['transcript'].split())
             }
-            return [result]
-        return []
+        return None
         
     except Exception as e:
-        logging.error(f"Error processing feed {feed_url}: {str(e)}")
+        logging.error(f"Error transcribing audio: {str(e)}")
+        return None
+
+async def process_feed(feed_url: str, dg_client: Deepgram) -> List[Dict]:
+    """
+    Process a podcast RSS feed and transcribe episodes.
+    """
+    try:
+        feed = feedparser.parse(feed_url)
+        transcripts = []
+        
+        for entry in feed.entries[:1]:  # Process only the latest episode for testing
+            audio_url = None
+            duration = None
+            
+            # Find the audio URL and duration
+            for link in entry.links:
+                if link.type and 'audio' in link.type:
+                    audio_url = link.href
+                    duration = float(getattr(entry, 'itunes_duration', 0))
+                    break
+            
+            if audio_url:
+                transcript_data = await transcribe_audio(audio_url, dg_client)
+                
+                if transcript_data:
+                    transcript_data['metadata'] = {
+                        'title': entry.title,
+                        'duration': duration,
+                        'episode_url': audio_url,
+                        'feed_url': feed_url,
+                        'published_date': datetime(*entry.published_parsed[:6]).isoformat(),
+                        'words': transcript_data['words']
+                    }
+                    transcripts.append(transcript_data)
+                    
+        return transcripts
+        
+    except Exception as e:
+        logging.error(f"Error processing feed: {str(e)}")
         return []
 
-async def collect_transcripts(feeds: List[str]) -> List[Dict]:
+async def collect_transcripts(feed_urls: List[str]) -> None:
     """
-    Collects transcripts from the provided podcast feeds.
-
-    Args:
-        feeds (List[str]): A list of podcast feed URLs.
-
-    Returns:
-        List[Dict]: A list of transcripts and their metadata
+    Collect and store transcripts from multiple podcast feeds.
     """
-    all_results = []
-    total_feeds = len(feeds)
-    
-    logging.info(f"Starting transcript collection for {total_feeds} feeds")
-    
-    for index, feed in enumerate(feeds, 1):
-        logging.info(f"Processing feed {index}/{total_feeds}: {feed}")
-        feed_results = await process_feed(feed)
-        all_results.extend(feed_results)
+    try:
+        # Initialize clients
+        dg_client = Deepgram(os.getenv('DEEPGRAM_API_KEY'))
+        weaviate_client = init_weaviate_client()
         
-        logging.info(f"Completed feed {index}/{total_feeds}")
-        logging.info(f"Current progress: {index/total_feeds*100:.1f}%")
+        # Ensure Weaviate schema exists
+        ensure_schema_exists(weaviate_client)
+        
+        # Process each feed
+        for feed_url in feed_urls:
+            transcripts = await process_feed(feed_url, dg_client)
+            
+            # Store transcripts in Weaviate
+            for transcript in transcripts:
+                uuid = store_podcast_transcript(weaviate_client, transcript)
+                if uuid:
+                    logging.info(f"Stored transcript with UUID: {uuid}")
+                else:
+                    logging.error("Failed to store transcript")
+                    
+    except Exception as e:
+        logging.error(f"Error in collect_transcripts: {str(e)}")
+    finally:
+        await dg_client.close()
+
+if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
     
-    logging.info(f"Transcript collection completed. Total transcripts: {len(all_results)}")
-    return all_results
+    # Example feed URLs
+    feed_urls = [
+        "https://feeds.megaphone.fm/huberman",
+        "https://lexfridman.com/feed/podcast/"
+    ]
+    
+    # Run the collector
+    asyncio.run(collect_transcripts(feed_urls))

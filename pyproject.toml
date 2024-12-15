@@ -7,13 +7,14 @@ readme = "README.md"
 packages = [{include = "*.py"}]
 
 [tool.poetry.dependencies]
-python = "^3.8"
-deepgram-sdk = "^3.0.0"
+python = "^3.9"
+deepgram-sdk = "^3.7.7"
 python-dotenv = "^1.0.0"
 feedparser = "^6.0.10"
 requests = "^2.31.0"
 beautifulsoup4 = "^4.12.2"
 asyncio = "^3.4.3"
+weaviate-client = "^4.10.2"
 
 [tool.poetry.scripts]
 hodgepod = "main:run_main"

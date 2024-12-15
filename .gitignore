@@ -33,7 +33,9 @@ ENV/
 
 # IDE
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
 *.swp
 *.swo
 .DS_Store
